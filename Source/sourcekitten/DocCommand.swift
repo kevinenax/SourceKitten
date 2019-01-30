@@ -9,6 +9,7 @@
 import Commandant
 import Result
 import SourceKittenFramework
+import Foundation
 
 struct DocCommand: CommandProtocol {
     let verb = "doc"
@@ -17,14 +18,15 @@ struct DocCommand: CommandProtocol {
     struct Options: OptionsProtocol {
         let spmModule: String
         let singleFile: Bool
+        let folder: Bool
         let moduleName: String
         let objc: Bool
         let arguments: [String]
 
-        static func create(spmModule: String) -> (_ singleFile: Bool) -> (_ moduleName: String) -> (_ objc: Bool) -> (_ arguments: [String]) -> Options {
-            return { singleFile in { moduleName in { objc in { arguments in
-                self.init(spmModule: spmModule, singleFile: singleFile, moduleName: moduleName, objc: objc, arguments: arguments)
-            }}}}
+        static func create(spmModule: String) -> (_ singleFile: Bool) -> (_ folder: Bool) -> (_ moduleName: String) -> (_ objc: Bool) -> (_ arguments: [String]) -> Options {
+            return { singleFile in { folder in { moduleName in { objc in { arguments in
+                self.init(spmModule: spmModule, singleFile: singleFile, folder: folder, moduleName: moduleName, objc: objc, arguments: arguments)
+                }}}}}
         }
 
         static func evaluate(_ mode: CommandMode) -> Result<Options, CommandantError<SourceKittenError>> {
@@ -33,6 +35,8 @@ struct DocCommand: CommandProtocol {
                                    usage: "document a Swift Package Manager module")
                 <*> mode <| Option(key: "single-file", defaultValue: false,
                                    usage: "only document one file")
+                <*> mode <| Option(key: "folder", defaultValue: false,
+                                   usage: "document a folder of files")
                 <*> mode <| Option(key: "module-name", defaultValue: "",
                                    usage: "name of module to document (can't be used with `--single-file` or `--objc`)")
                 <*> mode <| Option(key: "objc", defaultValue: false,
@@ -50,6 +54,8 @@ struct DocCommand: CommandProtocol {
             return runObjC(options: options, args: args)
         } else if options.singleFile {
             return runSwiftSingleFile(args: args)
+        } else if options.folder {
+            return runFolderOrList(args: args)
         }
         let moduleName: String? = options.moduleName.isEmpty ? nil : options.moduleName
         return runSwiftModule(moduleName: moduleName, args: args)
@@ -71,6 +77,30 @@ struct DocCommand: CommandProtocol {
             return .success(())
         }
         return .failure(.docFailed)
+    }
+
+    func runFolderOrList(args: [String]) -> Result<(), SourceKittenError> {
+        if args.isEmpty {
+            return .failure(.invalidArgument(description: "at least 5 arguments are required when using `--folder`"))
+        }
+        let sourcekitdArguments = Array(args.dropFirst(1))
+        do {
+            let fileStrings = try FileManager.default.contentsOfDirectory(atPath: args[0])
+            let baseUrl = URL(fileURLWithPath: args[0], isDirectory: true)
+
+            let fullPaths = fileStrings.map { baseUrl.appendingPathComponent($0) }
+            let files = fullPaths.compactMap { File(path: $0.path) }
+            let docs = files.compactMap({ SwiftDocs(file:$0, arguments:sourcekitdArguments) })
+            if docs.isEmpty {
+                print("docs was empty")
+                return .failure(.readFailed(path: args[0]))
+            } else {
+                print(docs)
+            }
+            return .success(())
+        } catch {
+            return .failure(.readFailed(path: args[0]))
+        }
     }
 
     func runSwiftSingleFile(args: [String]) -> Result<(), SourceKittenError> {
